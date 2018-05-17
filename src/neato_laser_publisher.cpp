@@ -34,9 +34,17 @@
 
 #include <ros/ros.h>
 #include <sensor_msgs/LaserScan.h>
+#include <sensor_msgs/Image.h>
+#include <sensor_msgs/PointCloud.h>
+
 #include <boost/asio.hpp>
 #include <xv_11_laser_driver/xv11_laser.h>
 #include <std_msgs/UInt16.h>
+#include <laser_geometry/laser_geometry.h>
+#include <cv_bridge/cv_bridge.h>
+#include <laser_geometry/laser_geometry.h>
+#include <opencv2/core.hpp>
+#include <sensor_msgs/image_encodings.h>
 
 int main(int argc, char **argv)
 {
@@ -49,11 +57,12 @@ int main(int argc, char **argv)
   std::string frame_id;
   int firmware_number;
  
-  std_msgs::UInt16 rpms; 
+  std_msgs::UInt16 rpms;
+  laser_geometry::LaserProjection projector;
 
   priv_nh.param("port", port, std::string("/dev/ttyUSB0"));
   priv_nh.param("baud_rate", baud_rate, 115200);
-  priv_nh.param("frame_id", frame_id, std::string("neato_laser"));
+  priv_nh.param("frame_id", frame_id, std::string("laser"));
   priv_nh.param("firmware_version", firmware_number, 2);
 
   boost::asio::io_service io;
@@ -62,6 +71,7 @@ int main(int argc, char **argv)
     xv_11_laser_driver::XV11Laser laser(port, baud_rate, firmware_number, io);
     ros::Publisher laser_pub = n.advertise<sensor_msgs::LaserScan>("scan", 1000);
     ros::Publisher motor_pub = n.advertise<std_msgs::UInt16>("rpms",1000);
+    ros::Publisher image_pub = n.advertise<sensor_msgs::Image>("lidargrid", 10);
 
     while (ros::ok()) {
       sensor_msgs::LaserScan::Ptr scan(new sensor_msgs::LaserScan);
@@ -71,6 +81,25 @@ int main(int argc, char **argv)
       rpms.data=laser.rpms;
       laser_pub.publish(scan);
       motor_pub.publish(rpms);
+      sensor_msgs::PointCloud cloud;
+      projector.projectLaser(*scan, cloud);
+
+      cv::Mat grey = cv::Mat::zeros(100, 100, CV_8UC1);
+
+      for(int i = 0; i < cloud.points.size(); i++) {
+          geometry_msgs::Point32 pt = cloud.points[i];
+          double x = (double)pt.x, y = (double) pt.y;
+          int xPixel = (int)(((x+5.0)/10.0)*100);
+          int yPixel = (int)(((y+5.0)/10.0)*100);
+          if(xPixel >= 0 && xPixel < 100 && yPixel >= 0 && yPixel < 100) {
+              grey.at<uint8_t>(xPixel,yPixel)=255;
+          }
+      }
+      cv_bridge::CvImage out_msg;
+      out_msg.encoding = sensor_msgs::image_encodings::MONO8;
+      out_msg.header.stamp = ros::Time::now();
+      out_msg.image = grey;
+      image_pub.publish(out_msg);
 
     }
     laser.close();
